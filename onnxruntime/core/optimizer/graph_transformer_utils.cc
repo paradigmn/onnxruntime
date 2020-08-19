@@ -5,7 +5,7 @@
 
 #include "core/mlas/inc/mlas.h"
 #include "core/optimizer/attention_fusion.h"
-#include "core/optimizer/bias_dropout_softmax_fusion.h"
+#include "core/optimizer/bias_softmax_fusion.h"
 #include "core/optimizer/bias_gelu_fusion.h"
 #include "core/optimizer/cast_elimination.h"
 #include "core/optimizer/constant_folding.h"
@@ -110,6 +110,7 @@ std::vector<std::unique_ptr<GraphTransformer>> GenerateTransformers(TransformerL
                                                                     const std::vector<std::string>& transformers_and_rules_to_enable) {
   std::vector<std::unique_ptr<GraphTransformer>> transformers;
   std::unique_ptr<RuleBasedGraphTransformer> rule_transformer = nullptr;
+
   switch (level) {
     case TransformerLevel::Level1: {
       std::unordered_set<std::string> l1_execution_providers = {};
@@ -143,6 +144,7 @@ std::vector<std::unique_ptr<GraphTransformer>> GenerateTransformers(TransformerL
       transformers.emplace_back(onnxruntime::make_unique<EmbedLayerNormFusion>(cpu_cuda_execution_providers));
 
       transformers.emplace_back(onnxruntime::make_unique<BiasGeluFusion>(cpu_cuda_execution_providers));
+      transformers.emplace_back(onnxruntime::make_unique<BiasSoftmaxFusion>(cpu_cuda_execution_providers));
       transformers.emplace_back(onnxruntime::make_unique<SkipLayerNormFusion>(cpu_cuda_execution_providers));
 
       transformers.emplace_back(onnxruntime::make_unique<FastGeluFusion>(cpu_cuda_execution_providers));
@@ -180,7 +182,6 @@ std::vector<std::unique_ptr<GraphTransformer>> GenerateTransformers(TransformerL
   if (level == TransformerLevel::Level2) {
     std::unordered_set<std::string> cuda_execution_providers = {onnxruntime::kCudaExecutionProvider};
     transformers.emplace_back(onnxruntime::make_unique<GeluApproximation>(cuda_execution_providers));
-    transformers.emplace_back(onnxruntime::make_unique<BiasDropoutSoftmaxFusion>(cuda_execution_providers));
   }
 #endif
 
