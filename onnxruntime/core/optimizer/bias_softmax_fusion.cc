@@ -4,16 +4,10 @@
 #include "core/common/logging/logging.h"
 #include "core/providers/common.h"
 #include "core/optimizer/initializer.h"
-#include "core/optimizer/bias_dropout_softmax_fusion.h"
+#include "core/optimizer/bias_softmax_fusion.h"
 #include "core/graph/graph_utils.h"
 #include "core/optimizer/utils.h"
 #include <deque>
-
-/* #define ILOGF_DEFAULT_SOURCE(format_str, ...)  \
-   LOGF_DEFAULT_CATEGORY(INFO, __FILE__, "%s:%d :: " format_str, __FILE__, __LINE__, ##__VA_ARGS__)
-
-// #define ILOGF(format_str, ...) \
-  ILOGF_DEFAULT_SOURCE(format_str,  ##__VA_ARGS__)
 
 // #define ILOGF(format_str, ...) \
   LOGF_DEFAULT(INFO, format_str, ##__VA_ARGS__) */
@@ -51,7 +45,7 @@ void select_input_on_lhs_condition(bool lhs_condition, Node& add_node, NodeArg**
   }
 }
 
-Status BiasDropoutSoftmaxFusion::ApplyImpl(Graph& graph, bool& modified, int graph_level, const logging::Logger& logger) const {
+Status BiasSoftmaxFusion::ApplyImpl(Graph& graph, bool& modified, int graph_level, const logging::Logger& logger) const {
   GraphViewer graph_viewer(graph);
   const auto& node_topology_list = graph_viewer.GetNodesInTopologicalOrder();
 
@@ -97,8 +91,7 @@ Status BiasDropoutSoftmaxFusion::ApplyImpl(Graph& graph, bool& modified, int gra
     }
     Node& softmax_node = const_cast<Node&>(*p);
     if (!graph_utils::IsSupportedOptypeVersionAndDomain(softmax_node, "Softmax", {1, 11}) ||
-        softmax_node.GetExecutionProviderType() != add_node.GetExecutionProviderType() ||
-        !optimizer_utils::CheckOutputEdges(graph, softmax_node, 1)) {
+        softmax_node.GetExecutionProviderType() != add_node.GetExecutionProviderType()) {
       ILOGF("Add node %s does not meet required softmax output.\n", add_node.Name().c_str());
       ILOGF("IsSupportedOptypeVersionAndDomain? %s\n", graph_utils::IsSupportedOptypeVersionAndDomain(softmax_node, "Softmax", {1, 11})? "true":"false");
       ILOGF("Matching EP? %s\n", softmax_node.GetExecutionProviderType() == add_node.GetExecutionProviderType()? "true":"false");
@@ -114,23 +107,9 @@ Status BiasDropoutSoftmaxFusion::ApplyImpl(Graph& graph, bool& modified, int gra
 
     ILOGF("Found softmax node %s.\n", softmax_node.Name().c_str());
 
-    // check softmax is only consumed by dropout with matching exec provider
-    p = softmax_node.OutputNodesBegin();
-    if (p == softmax_node.OutputNodesEnd()) {
-      ILOGF("Softmax node %s has no outputs.\n", softmax_node.Name().c_str());
-      continue;
-    }
-    Node& dropout_node = const_cast<Node&>(*p);
-    if (!graph_utils::IsSupportedOptypeVersionAndDomain(dropout_node, "Dropout", {12}) ||
-        dropout_node.GetExecutionProviderType() != softmax_node.GetExecutionProviderType()) {
-      continue;
-    }
-    ILOGF("Found dropout node %s.\n", dropout_node.Name().c_str());
-
     // can't perform conversion if output is graph output
-    if (!graph.GetNodeOutputsInGraphOutputs(add_node).empty() ||
-        !graph.GetNodeOutputsInGraphOutputs(softmax_node).empty()) {
-      ILOGF("One of softmax or dropout nodes has graph output.\n");
+    if (!graph.GetNodeOutputsInGraphOutputs(add_node).empty()) {
+      ILOGF("Cannot eliminate add node with graph output.\n");
       continue;
     }
 
@@ -149,7 +128,7 @@ Status BiasDropoutSoftmaxFusion::ApplyImpl(Graph& graph, bool& modified, int gra
        Then
            mask shape  = [ a0 ... a(B-1) 1    1    ...   1    ak a(k+1) ... a(N-1) ] 
        with rank = N and B < k, OR
-           mask shape  = [                                    ak a(k+1) ... a(N-1) ] 
+           mask shape  = [                   ...    1    1    ak a(k+1) ... a(N-1) ] 
        with rank = N-k.
 
        The mask will be repeated every aB*a(B+1)...*a(k-1) input batches.
@@ -264,19 +243,14 @@ Status BiasDropoutSoftmaxFusion::ApplyImpl(Graph& graph, bool& modified, int gra
 
     ILOGF("Fusing subgraph into BiasDropoutSoftmax node.\n");
 
-    std::string op_type = "BiasDropoutSoftmax";
+    std::string op_type = "BiasSoftmax";
     Node& fused_node = graph.AddNode(graph.GenerateNodeName(op_type),
                                     op_type,
-                                    "fused dropout(softmax(input + bias))",
+                                    "fused softmax(input + bias)",
                                     fused_inputs,
                                     {},
                                     {},
                                     kMSDomain);
-
-    // add attributes from dropout node (e.g. seed)
-    for (auto const& a : dropout_node.GetAttributes()) {
-      fused_node.AddAttribute(a.first, a.second);
-    }
 
     // add softmax axis and broadcast axis (to simplify runtime logic)
     // recall broadcast along axes B ... (k-1)
@@ -285,7 +259,7 @@ Status BiasDropoutSoftmaxFusion::ApplyImpl(Graph& graph, bool& modified, int gra
 
     // finalize node fusion (e.g. remove old nodes and shift outputs)
     fused_node.SetExecutionProviderType(add_node.GetExecutionProviderType());
-    graph_utils::FinalizeNodeFusion(graph, {add_node, softmax_node, dropout_node}, fused_node);
+    graph_utils::FinalizeNodeFusion(graph, {add_node, softmax_node}, fused_node);
 
     modified = true;
   }

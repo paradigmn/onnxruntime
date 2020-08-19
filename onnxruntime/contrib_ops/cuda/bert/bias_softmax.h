@@ -14,12 +14,12 @@ using namespace onnxruntime::cuda;
 
 template <typename input_t, typename output_t, typename acc_t>
 void dispatch_bias_softmax_forward(
-  output_t* dst, 
-  const input_t* src,
-  const input_t* bias,
-  int softmax_elements, 
+  output_t* output, 
+  const input_t* input, 
+  const input_t* input_bias, 
+  int element_count, 
+  int batch_count, 
   int batch_stride, 
-  int batch_count,
   int bias_repeat_count);
 
 template <typename T>

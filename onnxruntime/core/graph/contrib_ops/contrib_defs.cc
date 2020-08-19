@@ -545,20 +545,18 @@ GELU (Gaussian Error Linear Unit) approximation: Y=0.5*X*(1+tanh(0.797885*X+0.03
       .TypeConstraint("U", {"tensor(float)"}, "Constrain mean and inv_std_var to float tensors.")
       .TypeAndShapeInferenceFunction(ONNX_NAMESPACE::propagateShapeAndTypeFromFirstInput);
 
-  // schema merges Softmax and Dropout
-  ONNX_CONTRIB_OPERATOR_SCHEMA(BiasDropoutSoftmax)
+  ONNX_CONTRIB_OPERATOR_SCHEMA(BiasSoftmax)
       .SetDomain(kMSDomain)
       .SinceVersion(1)
       .SetSupportLevel(OpSchema::SupportType::EXPERIMENTAL)
-      .SetDoc("Specialize dropout(softmax(scores + additive_sequence_mask)) as commonly found in transformer models.")
-      .Attr("seed", "refer Dropout schema", AttributeProto::INT, OPTIONAL_VALUE)
-      .Attr("axis", "refer Softmax schema", AttributeProto::INT, static_cast<int64_t>(1))
+      .SetDoc(
+        "Y = softmax(scores + bias)) with simple broadcast on bias. "
+        "Intended to specialize softmax(scores + additive_mask) commonly found in transformer models.")
+      .Attr("softmax_axis", "apply softmax to elements for dimensions softmax_axis or higher", AttributeProto::INT, static_cast<int64_t>(1))
+      .Attr("broadcast_axis", "broadcast bias across input for dimensions broadcast_axis to softmax_axis-1", AttributeProto::INT, static_cast<int64_t>(1))
       .Input(0, "data", "The input data as Tensor.", "T")
-      .Input(1, "bias", "The bias (or mask) as Tensor.", "T")
-      .Input(2, "ratio", "refer Dropout schema", "T1", OpSchema::Optional)
-      .Input(3, "training_mode", "refer Dropout schema", "T2", OpSchema::Optional)            
+      .Input(1, "bias", "The bias (or mask) as Tensor.", "T")          
       .Output(0, "output", "The output.", "T")
-      .Output(1, "mask", "The output mask.", "T2", OpSchema::Optional)
       .TypeConstraint(
           "T",
           {"tensor(float16)", "tensor(float)", "tensor(double)"},
@@ -571,57 +569,8 @@ GELU (Gaussian Error Linear Unit) approximation: Y=0.5*X*(1+tanh(0.797885*X+0.03
           "T2",
           {"tensor(bool)"},
           "Constrain output 'mask' types to boolean tensors.")
-      .TypeAndShapeInferenceFunction([](ONNX_NAMESPACE::InferenceContext& ctx) {
-
-        // propagate output shape
-        propagateElemTypeFromInputToOutput(ctx, 0, 0);
-        if (hasInputShape(ctx, 0)) {
-          propagateShapeFromInputToOutput(ctx, 0, 0);
-        }
-
-        // todo: check bias broadcasts to input as expected
-        // ...
-
-        // validate attribute 'axis'
-        const ONNX_NAMESPACE::TensorShapeProto& input_shape =
-            ctx.getInputType(0)->tensor_type().shape();
-        int r = input_shape.dim_size();
-        int axis = static_cast<int>(getAttribute(ctx, "axis", 1));
-        if (axis < -r || axis >= r) {
-          fail_shape_inference(
-              "'axis' must be in [",
-              -r,
-              " , ",
-              (r - 1),
-              "]. Its actual value is: ",
-              axis);
-        }
-
-        // validate 'ratio'
-        if (ctx.getNumInputs() > 2 && hasInputShape(ctx, 2)) {
-          auto& ratio_input_shape = getInputShape(ctx, 2);
-          if (static_cast<int>(ratio_input_shape.dim_size()) != 0) {
-            fail_shape_inference("Ratio of Dropout must be a scalar.");
-          }
-        }
-
-        // validate 'training_mode'
-        if (ctx.getNumInputs() > 3 && hasInputShape(ctx, 3)) {
-          auto& training_mode_input_shape = getInputShape(ctx, 2);
-          if (static_cast<int>(training_mode_input_shape.dim_size()) != 0) {
-            fail_shape_inference("training_mode of Dropout must be a scalar.");
-          }
-        }
-
-        // propagate output 'mask' shape
-        if (ctx.getNumOutputs() == 2) {
-          updateOutputElemType(ctx, 1, ONNX_NAMESPACE::TensorProto::BOOL);
-          if (hasNInputShapes(ctx, 1)) {
-            propagateShapeFromInputToOutput(ctx, 0, 1);
-          }
-        }
-
-      });
+      .TypeAndShapeInferenceFunction(ONNX_NAMESPACE::propagateShapeAndTypeFromFirstInput);
+      
 }
 
 void RegisterContribSchemas() {
